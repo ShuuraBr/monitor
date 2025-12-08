@@ -9,7 +9,7 @@ import requests
 import urllib.parse
 import socket
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse # <--- Adicionado FileResponse
 
 # --- 1. CONFIGURAÇÃO WHATSAPP ---
 WPP_PHONE = "556134623569"  
@@ -35,14 +35,11 @@ def get_gpu_details():
     """
     Busca: Carga(%), Memória Usada(MB), Memória Total(MB), Temperatura(C)
     """
-    # Dados padrão se falhar
     dados = {"load": 0, "mem_used": 0, "mem_total": 0, "temp": 0}
     
     try:
-        # Comando Mágico: Pede tudo de uma vez separado por vírgula
         cmd = "nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits"
         output = subprocess.check_output(cmd, shell=True).decode().strip()
-        # Exemplo de saída: "45, 2048, 8192, 65"
         partes = output.split(',')
         
         if len(partes) == 4:
@@ -71,12 +68,10 @@ def get_net_name():
     except: pass
     return "Desconhecido"
 
-# Adiciona caminhos
 paths = [r"C:\Program Files\NVIDIA Corporation\NVSMI", r"C:\Windows\System32"]
 for p in paths:
     if os.path.exists(p): os.environ["PATH"] += os.pathsep + p
 
-# Pega nomes estáticos uma vez só
 def get_gpu_name_static():
     try:
         cmd = "powershell \"Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name\""
@@ -126,7 +121,6 @@ html = """
             .big-value { font-size: 3.5rem; font-weight: bold; color: #fff; line-height: 1; }
             .unit { font-size: 1.2rem; color: #45a29e; }
 
-            /* Grid de Detalhes (A mágica acontece aqui) */
             .details-grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
@@ -143,7 +137,6 @@ html = """
             .progress-track { background: #0b0c10; height: 8px; border-radius: 4px; width: 100%; margin-top: 15px; overflow: hidden; }
             .progress-fill { height: 100%; width: 0%; background: #45a29e; transition: width 0.3s; }
 
-            /* Cores Específicas */
             .crit-border { border-left-color: #ff3333 !important; }
             .crit-text { color: #ff3333 !important; }
             .crit-fill { background: #ff3333 !important; }
@@ -156,7 +149,7 @@ html = """
         <div id="wpp-alert">🚀 ALERTA ENVIADO!</div>
         <h1>NOC - Monitoramento Pro</h1>
         <br>
-        <button onclick="enableAudio()">🔊 Habilitar Som</button>
+        <button onclick="enableAudio()">🔊 Habilitar Som de Alerta</button>
         <br><br>
 
         <div class="dashboard">
@@ -223,9 +216,27 @@ html = """
 
         <script>
             var ws = new WebSocket("ws://" + window.location.host + "/ws");
-            var audio = new Audio('alerta_latencia_alta.mp3');
+            
+            // Carrega o arquivo de áudio servido pela nova rota
+            var audio = new Audio('/alerta_latencia_alta.mp3'); 
             var soundOn = false;
-            function enableAudio() { soundOn = true; audio.play().then(()=>audio.pause()); document.querySelector('button').style.display='none'; }
+            
+            // Cooldown do áudio no Frontend para não "engasgar" (tocar um em cima do outro)
+            var isPlaying = false;
+
+            function enableAudio() { 
+                soundOn = true; 
+                // Tenta tocar baixinho só para liberar permissão do navegador
+                audio.volume = 0;
+                audio.play().then(() => {
+                    audio.pause();
+                    audio.currentTime = 0;
+                    audio.volume = 1;
+                    document.querySelector('button').innerText = "🔊 Áudio Ativado!";
+                    document.querySelector('button').style.background = "#45a29e";
+                    document.querySelector('button').style.color = "#000";
+                }).catch(e => console.log("Erro ao habilitar áudio:", e));
+            }
 
             ws.onmessage = function(event) {
                 var data = JSON.parse(event.data);
@@ -239,33 +250,41 @@ html = """
                 if(data.ping_val > 100) {
                     document.getElementById('net-status').innerText = "LATÊNCIA ALTA";
                     document.getElementById('net-status').style.color = "#ff3333";
-                    if(soundOn) audio.play().catch(e=>{});
+                    
+                    // Lógica para tocar o áudio
+                    if(soundOn && !isPlaying) {
+                        isPlaying = true;
+                        audio.play().catch(e => console.log("Erro playback:", e));
+                        
+                        // Reseta a flag quando o áudio termina para poder tocar de novo
+                        audio.onended = function() {
+                            isPlaying = false;
+                        };
+                    }
+
                 } else {
                     document.getElementById('net-status').innerText = "Estável";
                     document.getElementById('net-status').style.color = "#fff";
                 }
 
-                // --- CPU ---
+                // --- ATUALIZAÇÕES VISUAIS RESTANTES ---
                 document.getElementById('val-cpu').innerText = data.cpu_load;
                 document.getElementById('cpu-name').innerText = data.cpu_name;
                 document.getElementById('cpu-freq').innerText = data.cpu_freq + " GHz";
                 document.getElementById('cpu-cores').innerText = data.cpu_threads;
                 updateBar('cpu', data.cpu_load, 85);
 
-                // --- RAM ---
                 document.getElementById('val-ram').innerText = data.ram_percent;
                 document.getElementById('ram-used').innerText = data.ram_used + " GB";
                 document.getElementById('ram-total').innerText = data.ram_total + " GB";
                 updateBar('ram', data.ram_percent, 90);
 
-                // --- GPU ---
                 document.getElementById('val-gpu').innerText = data.gpu_load;
                 document.getElementById('gpu-name').innerText = data.gpu_name;
                 document.getElementById('gpu-temp').innerText = data.gpu_temp + " °C";
                 document.getElementById('gpu-mem').innerText = data.gpu_mem;
                 updateBar('gpu', data.gpu_load, 85);
 
-                // --- WPP ---
                 if(data.wpp_sent) {
                     var box = document.getElementById('wpp-alert');
                     box.style.display = 'block';
@@ -297,11 +316,18 @@ html = """
 @app.get("/")
 async def get(): return HTMLResponse(html)
 
+# --- NOVA ROTA PARA O ARQUIVO MP3 ---
+@app.get("/alerta_latencia_alta.mp3")
+async def get_audio_file():
+    # Certifique-se de que o arquivo existe na pasta
+    if os.path.exists("alerta_latencia_alta.mp3"):
+        return FileResponse("alerta_latencia_alta.mp3")
+    return HTMLResponse("Arquivo de áudio não encontrado", status_code=404)
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     
-    # Dados estáticos (CPU Name)
     cpu_threads = psutil.cpu_count()
     
     try:
@@ -309,21 +335,22 @@ async def websocket_endpoint(websocket: WebSocket):
             # 1. Rede
             net_name = get_net_name()
             net_ip = get_local_ip()
-            ping = random.randint(10, 120)
+            
+            # --- SIMULAÇÃO ---
+            # random.randint(10, 120) fará o áudio tocar com frequência pois 120 > 100
+            ping = random.randint(10, 120) 
 
             # 2. CPU
             cpu_load = psutil.cpu_percent(interval=None)
-            cpu_freq = round(psutil.cpu_freq().current / 1000, 2) # Converte MHz para GHz
+            cpu_freq = round(psutil.cpu_freq().current / 1000, 2)
 
             # 3. RAM
             mem = psutil.virtual_memory()
             ram_used = round(mem.used / (1024**3), 1)
             ram_total = round(mem.total / (1024**3), 1)
 
-            # 4. GPU (Detalhada via NVIDIA)
+            # 4. GPU
             gpu_data = get_gpu_details()
-            
-            # Formata memória da GPU (ex: 4096 / 8192 MB)
             gpu_mem_str = f"{int(gpu_data['mem_used'])} / {int(gpu_data['mem_total'])} MB"
 
             # 5. Zap
