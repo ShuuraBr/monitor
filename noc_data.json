@@ -1,0 +1,29 @@
+{
+    "alerts_history": [
+        {
+            "time": "10:25:00",
+            "level": "CRIT",
+            "msg": "CPU CR\u00cdTICA: 90.9%"
+        },
+        {
+            "time": "10:24:59",
+            "level": "CRIT",
+            "msg": "CPU CR\u00cdTICA: 96.1%"
+        },
+        {
+            "time": "10:24:58",
+            "level": "CRIT",
+            "msg": "CPU CR\u00cdTICA: 97.4%"
+        },
+        {
+            "time": "10:24:57",
+            "level": "CRIT",
+            "msg": "CPU CR\u00cdTICA: 99.8%"
+        },
+        {
+            "time": "10:24:54",
+            "level": "CRIT",
+            "msg": "CPU CR\u00cdTICA: 100.0%"
+        }
+    ]
+}
